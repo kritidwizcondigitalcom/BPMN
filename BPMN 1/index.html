@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Combined Drawing and Recognition</title>
+</head>
+<body>
+  <div>Combined Drawing and Recognition</div>
+  <div id="canvasContainer">
+    <!-- Canvas will be created here -->
+  </div>
+  <button onclick="classifyCanvas()">Identify Shape</button>
+  <button onclick="clearCanvas()">Clear Canvas</button>
+  <button id="startCircleButton" style="display: none;">Start Circle</button>
+  <button id="stopCircleButton" style="display: none;">Stop Circle</button>
+  <button id="startBoundaryCircleButton" style="display: none;">Start Boundary Circle</button>
+  <button id="startSquareButton" style="display: none;">Start Square</button>
+  <button id="stopSquareButton" style="display: none;">Stop Square</button>
+  <div id="buttonsContainer">
+    <!-- ... (other buttons) ... -->
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/p5@latest/lib/p5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ml5@latest/dist/ml5.min.js"></script>
+  <script>
+    let classifier;
+    let imageModelURL = 'https://teachablemachine.withgoogle.com/models/QQFxGmjmb/';
+    let canvas;
+    let isDrawing = false;
+    let previousX, previousY;
+    let userDrawingPoints = [];
+    let recognizedShapes = [];
+    let startCircleButton, stopCircleButton, startBoundaryCircleButton, startSquareButton, stopSquareButton;
+
+    function setup() {
+      canvas = createCanvas(800, 600);
+      canvas.parent('canvasContainer');
+      background(255);
+      canvas.mouseReleased(classifyCanvas);
+      canvas.mousePressed(startDrawing);
+      canvas.mouseReleased(stopDrawing);
+      startCircleButton = select('#startCircleButton');
+      stopCircleButton = select('#stopCircleButton');
+      startBoundaryCircleButton = select('#startBoundaryCircleButton');
+      startSquareButton = select('#startSquareButton');
+      stopSquareButton = select('#stopSquareButton');
+      stopSquareButton.mousePressed(stopSquareButtonPressed);
+      classifier = ml5.imageClassifier(imageModelURL + 'model.json');
+    }
+
+    function draw() {
+      if (isDrawing) {
+        stroke(0);
+        strokeWeight(4);
+        line(previousX, previousY, mouseX, mouseY);
+        userDrawingPoints.push({ x: mouseX, y: mouseY });
+        previousX = mouseX;
+        previousY = mouseY;
+      }
+
+      noFill();
+      for (let shape of recognizedShapes) {
+        stroke(shape.color);
+        strokeWeight(2);
+        if (shape.isSquare) {
+          rectMode(CENTER);
+          if (shape.isDotted) {
+            drawDottedSquare(shape.centerX, shape.centerY, shape.sideLength);
+          } else {
+            rect(shape.centerX, shape.centerY, shape.sideLength, shape.sideLength);
+          }
+        } else if (shape.isCircle) {
+          ellipse(shape.centerX, shape.centerY, shape.radius * 2);
+        } else if (shape.isBoundaryCircle) {
+          ellipse(shape.centerX, shape.centerY, shape.radius * 2);
+        }
+      }
+    }
+
+    function drawDottedSquare(x, y, sideLength) {
+      const dotSpacing = 10;
+      for (let i = x - sideLength / 2; i < x + sideLength / 2; i += dotSpacing) {
+        point(i, y - sideLength / 2);
+        point(i, y + sideLength / 2);
+      }
+      for (let i = y - sideLength / 2; i < y + sideLength / 2; i += dotSpacing) {
+        point(x - sideLength / 2, i);
+        point(x + sideLength / 2, i);
+      }
+    }
+
+    function redrawShapes() {
+      background(255);
+      for (let shape of recognizedShapes) {
+        stroke(shape.color);
+        strokeWeight(2);
+        if (shape.isSquare) {
+          rectMode(CENTER);
+          if (shape.isDotted) {
+            drawDottedSquare(shape.centerX, shape.centerY, shape.sideLength);
+          } else {
+            rect(shape.centerX, shape.centerY, shape.sideLength, shape.sideLength);
+          }
+        } else if (shape.isCircle) {
+          ellipse(shape.centerX, shape.centerY, shape.radius * 2);
+        } else if (shape.isBoundaryCircle) {
+          ellipse(shape.centerX, shape.centerY, shape.radius * 2);
+        }
+      }
+    }
+
+    function startDrawing() {
+      isDrawing = true;
+      previousX = mouseX;
+      previousY = mouseY;
+      userDrawingPoints = [];
+    }
+
+    function stopDrawing() {
+      isDrawing = false;
+    }
+
+    function classifyCanvas() {
+      if (!canvas) return;
+      let imageData = canvas.canvas.toDataURL();
+      let img = createImg(imageData, imageReady);
+      img.hide();
+    }
+
+    function imageReady() {
+      if (!canvas) return;
+      classifier.classify(canvas.canvas, gotResult);
+    }
+
+    function calculateCircleParams(points) {
+      let sumX = 0;
+      let sumY = 0;
+      for (let point of points) {
+        sumX += point.x;
+        sumY += point.y;
+      }
+      const centerX = sumX / points.length;
+      const centerY = sumY / points.length;
+
+      let maxRadius = 0;
+      for (let point of points) {
+        let dx = point.x - centerX;
+        let dy = point.y - centerY;
+        let radius = Math.sqrt(dx * dx + dy * dy);
+        maxRadius = Math.max(maxRadius, radius);
+      }
+
+      return { centerX, centerY, radius: maxRadius };
+    }
+
+    function calculateSquareParams(points) {
+      let minX = points[0].x;
+      let maxX = points[0].x;
+      let minY = points[0].y;
+      let maxY = points[0].y;
+
+      for (let point of points) {
+        minX = Math.min(minX, point.x);
+        maxX = Math.max(maxX, point.x);
+        minY = Math.min(minY, point.y);
+        maxY = Math.max(maxY, point.y);
+      }
+
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      const sideLength = Math.max(maxX - minX, maxY - minY);
+
+      return { centerX, centerY, sideLength };
+    }
+
+    function calculateRectangleParams(points) {
+      let minX = points[0].x;
+      let maxX = points[0].x;
+      let minY = points[0].y;
+      let maxY = points[0].y;
+
+      for (let point of points) {
+        minX = Math.min(minX, point.x);
+        maxX = Math.max(maxX, point.x);
+        minY = Math.min(minY, point.y);
+        maxY = Math.max(maxY, point.y);
+      }
+
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      const width = maxX - minX;
+      const height = maxY - minY;
+
+      return { centerX, centerY, width, height };
+    }
+
+    function gotResult(error, results) {
+      if (error) {
+        console.error(error);
+        return;
+      }
+
+      let label = results[0].label;
+
+      if (label === "Circle") {
+        let { centerX, centerY, radius } = calculateCircleParams(userDrawingPoints);
+
+        startCircleButton.style('display', 'inline');
+        stopCircleButton.style('display', 'inline');
+        startBoundaryCircleButton.style('display', 'inline');
+        startSquareButton.style('display', 'inline');
+        stopSquareButton.style('display', 'inline');
+
+        startCircleButton.mousePressed(() => {
+          recognizedShapes.push({ centerX, centerY, radius, isSquare: false, isCircle: true, isBoundaryCircle: false, color: color(255, 0, 0) });
+          userDrawingPoints = [];
+          clearCanvas();
+        });
+
+        stopCircleButton.mousePressed(() => {
+          recognizedShapes.push({ centerX, centerY, radius, isSquare: false, isCircle: true, isBoundaryCircle: false, color: color(0) });
+          userDrawingPoints = [];
+          clearCanvas();
+        });
+
+        startBoundaryCircleButton.mousePressed(() => {
+          recognizedShapes.push({ centerX, centerY, radius, isSquare: false, isCircle: false, isBoundaryCircle: true, color: color(0, 255, 0) });
+          recognizedShapes.push({ centerX, centerY, radius: radius - 20, isSquare: false, isCircle: false, isBoundaryCircle: true, color: color(0, 255, 0) });
+          userDrawingPoints = [];
+          clearCanvas();
+        });
+      } else if (label === "Square") {
+    let { centerX, centerY, sideLength } = calculateSquareParams(userDrawingPoints);
+
+    startSquareButton.style('display', 'inline');
+    stopSquareButton.style('display', 'inline');
+
+    startSquareButton.mousePressed(() => {
+      recognizedShapes.push({ centerX, centerY, sideLength, isSquare: true, isDotted: true, color: color(0, 0, 0) });
+      userDrawingPoints = [];
+      clearCanvas();
+      redrawShapes(); // Call the function to redraw recognized shapes
+    });
+
+    stopSquareButton.mousePressed(() => {
+      // Do nothing here, wait for the user to press the "Stop Square" button
+    });
+  }
+}
+
+function stopSquareButtonPressed() {
+  console.log('Here 1');
+  let { centerX, centerY, sideLength } = calculateSquareParams(userDrawingPoints);
+  console.log('Here 2');
+  recognizedShapes.push({ centerX, centerY, sideLength, isSquare: true, isDotted: true, color: color(0) });
+  console.log('Here 3');
+  userDrawingPoints = [];
+  console.log('Here 4');
+  clearCanvas();
+  console.log('Here 5');
+  redrawShapes(); // Call the function to redraw recognized shapes
+  console.log('Here 6');
+}
+
+
+    function checkPerfectCircle(centerX, centerY, radius) {
+      // Logic to check if the recognized circle is a perfect circle
+      // You can implement your own criteria here
+      return true;
+    }
+
+    function checkPerfectSquare(sideLength) {
+      // Logic to check if the recognized square is a perfect square
+      // You can implement your own criteria here
+      return true;
+    }
+
+    function clearCanvas() {
+      background(255);
+      // You can add any additional logic here for clearing
+    }
+
+    window.addEventListener('DOMContentLoaded', function () {
+      classifier = ml5.imageClassifier(imageModelURL + 'model.json');
+    });
+  </script>
+</body>
+</html>
